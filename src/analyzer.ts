@@ -15,7 +15,10 @@ import {
   readSolidityFile,
   isCommentLine,
   getContractName,
-  getPragmaVersion
+  getPragmaVersion,
+  extractFunctionBody,
+  hasModifier,
+  findStateVariables
 } from './utils';
 
 export interface AnalyzerOptions {
@@ -55,7 +58,7 @@ export class SmartContractAnalyzer {
   analyzeFile(filePath: string): FileAnalysis {
     const fileContent = readSolidityFile(filePath);
     const results = this.scanContent(fileContent);
-    
+
     return {
       file: filePath,
       contractName: getContractName(fileContent.content),
@@ -67,7 +70,7 @@ export class SmartContractAnalyzer {
 
   analyzeFiles(filePaths: string[]): AnalysisReport {
     const files: FileAnalysis[] = [];
-    
+
     for (const filePath of filePaths) {
       try {
         const analysis = this.analyzeFile(filePath);
@@ -83,9 +86,9 @@ export class SmartContractAnalyzer {
         });
       }
     }
-    
+
     const totalIssues = files.reduce((sum, f) => sum + f.results.length, 0);
-    
+
     return {
       files,
       totalIssues,
@@ -96,24 +99,24 @@ export class SmartContractAnalyzer {
   private scanContent(fileContent: FileContent): AnalysisResult[] {
     const results: AnalysisResult[] = [];
     const lines = fileContent.lines;
-    
+
     for (let i = 0; i < lines.length; i++) {
       const lineNumber = i + 1;
       const line = lines[i];
-      
+
       if (isCommentLine(line)) {
         continue;
       }
-      
+
       for (const pattern of this.patterns) {
         if (this.shouldSkipPattern(pattern)) {
           continue;
         }
-        
+
         const match = this.findPatternMatch(line, pattern);
         if (match) {
           const context = this.analyzeContext(fileContent.content, i, pattern);
-          
+
           if (this.shouldReportIssue(pattern, context)) {
             results.push({
               type: pattern.type,
@@ -129,10 +132,21 @@ export class SmartContractAnalyzer {
         }
       }
     }
-    
+
     results.push(...this.detectReentrancyPatterns(fileContent));
     results.push(...this.detectAccessControlIssues(fileContent));
-    
+    results.push(...this.detectDelegateCallIssues(fileContent));
+    results.push(...this.detectTxOriginIssues(fileContent));
+    results.push(...this.detectSignatureMalleabilityIssues(fileContent));
+    results.push(...this.detectUnsafeERC20Issues(fileContent));
+    results.push(...this.detectUnprotectedInitialize(fileContent));
+    results.push(...this.detectMissingZeroCheck(fileContent));
+    results.push(...this.detectHardcodedAddresses(fileContent));
+    results.push(...this.detectUnsafeCast(fileContent));
+    results.push(...this.detectShadowing(fileContent));
+    results.push(...this.detectMissingFallback(fileContent));
+    results.push(...this.detectEtherLoss(fileContent));
+
     return this.deduplicateResults(results);
   }
 
@@ -153,13 +167,13 @@ export class SmartContractAnalyzer {
     if (!pattern.contextPatterns || pattern.contextPatterns.length === 0) {
       return { hasContext: false, contextLines: [] };
     }
-    
+
     const lines = content.split(/\r?\n/);
     const contextLines: string[] = [];
     const searchRange = Math.min(50, lines.length);
     const startIndex = Math.max(0, lineIndex - searchRange);
     const endIndex = Math.min(lines.length, lineIndex + searchRange);
-    
+
     for (let i = startIndex; i < endIndex; i++) {
       for (const ctxPattern of pattern.contextPatterns) {
         if (ctxPattern.test(lines[i])) {
@@ -167,7 +181,7 @@ export class SmartContractAnalyzer {
         }
       }
     }
-    
+
     return {
       hasContext: contextLines.length > 0,
       contextLines
@@ -178,11 +192,11 @@ export class SmartContractAnalyzer {
     if (!this.options.includeWarnings && pattern.severity === Severity.Info) {
       return true;
     }
-    
+
     if (this.options.excludePatterns) {
       return this.options.excludePatterns.includes(pattern.type);
     }
-    
+
     return false;
   }
 
@@ -194,36 +208,48 @@ export class SmartContractAnalyzer {
       if (pattern.type === VulnerabilityType.AccessControl) {
         return !context.hasContext;
       }
-      
+
       if (pattern.type === VulnerabilityType.UnprotectedFunction) {
         return !context.hasContext;
       }
+
+      if (pattern.type === VulnerabilityType.UnprotectedInitialize) {
+        return !context.hasContext;
+      }
+
+      if (pattern.type === VulnerabilityType.UnsafeERC20) {
+        return !context.hasContext;
+      }
+
+      if (pattern.type === VulnerabilityType.MissingFallback) {
+        return !context.hasContext;
+      }
     }
-    
+
     return true;
   }
 
   private detectReentrancyPatterns(fileContent: FileContent): AnalysisResult[] {
     const results: AnalysisResult[] = [];
     const lines = fileContent.lines;
-    
+
     let inVulnerableFunction = false;
     let functionStartLine = 0;
     let hasStateWrite = false;
     let hasExternalCall = false;
     let externalCallLine = 0;
-    
+
     const stateChangePattern = /(?:\w+\s*=\s*|emit\s+\w+|selfdestruct)/i;
     const externalCallPattern = /\.(?:call|send|transfer|delegatecall)\s*\(/i;
     const functionPattern = /function\s+\w+\s*\([^)]*\)\s*(?:external|public)/i;
     const functionEndPattern = /^\s*\}\s*$/;
-    
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lineNumber = i + 1;
-      
+
       if (isCommentLine(line)) continue;
-      
+
       if (functionPattern.test(line)) {
         inVulnerableFunction = true;
         functionStartLine = lineNumber;
@@ -231,7 +257,7 @@ export class SmartContractAnalyzer {
         hasExternalCall = false;
         continue;
       }
-      
+
       if (inVulnerableFunction) {
         if (functionEndPattern.test(line)) {
           if (hasExternalCall && hasStateWrite && externalCallLine < functionStartLine + 5) {
@@ -249,25 +275,25 @@ export class SmartContractAnalyzer {
           inVulnerableFunction = false;
           continue;
         }
-        
+
         if (stateChangePattern.test(line) && !hasStateWrite) {
           hasStateWrite = true;
         }
-        
+
         if (externalCallPattern.test(line) && !hasExternalCall) {
           hasExternalCall = true;
           externalCallLine = lineNumber;
         }
       }
     }
-    
+
     return results;
   }
 
   private detectAccessControlIssues(fileContent: FileContent): AnalysisResult[] {
     const results: AnalysisResult[] = [];
     const lines = fileContent.lines;
-    
+
     const accessControlModifiers = [
       /onlyOwner/i,
       /onlyAdmin/i,
@@ -276,7 +302,7 @@ export class SmartContractAnalyzer {
       /requiresAuth/i,
       /modifier\s+only/i
     ];
-    
+
     const dangerousFunctionPattern = /function\s+\w+\s*\([^)]*\)\s*(?:external|public)\s*(?:payable)?\s*\{/i;
     const dangerousKeywords = [
       /selfdestruct/i,
@@ -286,33 +312,33 @@ export class SmartContractAnalyzer {
       /withdraw/i,
       /transferOwnership/i
     ];
-    
+
     let inFunction = false;
     let functionStartLine = 0;
     let hasAccessControl = false;
     let isDangerous = false;
     let functionLine = '';
-    
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lineNumber = i + 1;
-      
+
       if (isCommentLine(line)) continue;
-      
+
       if (dangerousFunctionPattern.test(line)) {
         inFunction = true;
         functionStartLine = lineNumber;
         hasAccessControl = false;
         isDangerous = false;
         functionLine = line;
-        
+
         for (const modifier of accessControlModifiers) {
           if (modifier.test(line)) {
             hasAccessControl = true;
             break;
           }
         }
-        
+
         for (const keyword of dangerousKeywords) {
           if (keyword.test(line)) {
             isDangerous = true;
@@ -320,20 +346,20 @@ export class SmartContractAnalyzer {
         }
         continue;
       }
-      
+
       if (inFunction) {
         for (const modifier of accessControlModifiers) {
           if (modifier.test(line)) {
             hasAccessControl = true;
           }
         }
-        
+
         for (const keyword of dangerousKeywords) {
           if (keyword.test(line)) {
             isDangerous = true;
           }
         }
-        
+
         if (/^\s*\}\s*$/.test(line)) {
           if (isDangerous && !hasAccessControl) {
             results.push({
@@ -351,14 +377,442 @@ export class SmartContractAnalyzer {
         }
       }
     }
-    
+
+    return results;
+  }
+
+  private detectDelegateCallIssues(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const delegateCallPattern = /\.delegatecall\s*\(/i;
+    const functionPattern = /function\s+\w+\s*\([^)]*\)\s*(?:external|public)/i;
+    const functionEndPattern = /^\s*\}\s*$/;
+
+    let inFunction = false;
+    let functionStartLine = 0;
+    let hasDelegateCall = false;
+    let delegateCallLine = 0;
+    let delegateCallCode = '';
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      if (functionPattern.test(line)) {
+        inFunction = true;
+        functionStartLine = lineNumber;
+        hasDelegateCall = false;
+        continue;
+      }
+
+      if (inFunction) {
+        if (functionEndPattern.test(line)) {
+          if (hasDelegateCall) {
+            results.push({
+              type: VulnerabilityType.DelegateCall,
+              severity: Severity.Critical,
+              name: 'Unsafe Delegatecall Usage',
+              description: 'Function uses delegatecall which can lead to contract takeover',
+              recommendation: 'Restrict delegatecall to trusted addresses; avoid user-controlled targets',
+              line: delegateCallLine,
+              code: delegateCallCode,
+              file: fileContent.path
+            });
+          }
+          inFunction = false;
+          continue;
+        }
+
+        if (delegateCallPattern.test(line) && !hasDelegateCall) {
+          hasDelegateCall = true;
+          delegateCallLine = lineNumber;
+          delegateCallCode = line.trim();
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private detectTxOriginIssues(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const txOriginPattern = /tx\.origin/i;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      if (txOriginPattern.test(line)) {
+        results.push({
+          type: VulnerabilityType.TxOrigin,
+          severity: Severity.High,
+          name: 'Tx Origin Authentication',
+          description: 'Using tx.origin for authentication is vulnerable to phishing attacks',
+          recommendation: 'Use msg.sender instead of tx.origin for authentication',
+          line: lineNumber,
+          code: line.trim(),
+          file: fileContent.path
+        });
+      }
+    }
+
+    return results;
+  }
+
+  private detectSignatureMalleabilityIssues(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const ecrecoverPattern = /ecrecover\s*\(/i;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      if (ecrecoverPattern.test(line)) {
+        results.push({
+          type: VulnerabilityType.SignatureMalleability,
+          severity: Severity.High,
+          name: 'Signature Malleability Risk',
+          description: 'ECDSA signature verification may be vulnerable to malleability attacks',
+          recommendation: 'Use OpenZeppelin ECDSA library with proper signature validation',
+          line: lineNumber,
+          code: line.trim(),
+          file: fileContent.path
+        });
+      }
+    }
+
+    return results;
+  }
+
+  private detectUnsafeERC20Issues(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const unsafeTransferPattern = /(?:IERC20|token)\s*\([^)]+\)\.transfer(?:From)?\s*\(/i;
+    const safeERC20Pattern = /using\s+SafeERC20|SafeERC20/i;
+    const hasSafeERC20 = lines.some(line => safeERC20Pattern.test(line));
+
+    if (hasSafeERC20) return results;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      if (unsafeTransferPattern.test(line)) {
+        results.push({
+          type: VulnerabilityType.UnsafeERC20,
+          severity: Severity.Medium,
+          name: 'Unsafe ERC20 Operations',
+          description: 'Using transfer/transferFrom without SafeERC20 library',
+          recommendation: 'Use SafeERC20 library for token operations',
+          line: lineNumber,
+          code: line.trim(),
+          file: fileContent.path
+        });
+      }
+    }
+
+    return results;
+  }
+
+  private detectUnprotectedInitialize(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const initializePattern = /function\s+(?:initialize|init|initializeV\d*)\s*\([^)]*\)\s*(?:external|public)/i;
+    const initializerModifier = /onlyInitializing|onlyProxy|initializer/i;
+
+    let inFunction = false;
+    let functionStartLine = 0;
+    let hasInitializerModifier = false;
+    let functionLine = '';
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      if (initializePattern.test(line)) {
+        inFunction = true;
+        functionStartLine = lineNumber;
+        hasInitializerModifier = initializerModifier.test(line);
+        functionLine = line;
+        continue;
+      }
+
+      if (inFunction) {
+        if (initializerModifier.test(line)) {
+          hasInitializerModifier = true;
+        }
+
+        if (/^\s*\}\s*$/.test(line)) {
+          if (!hasInitializerModifier) {
+            results.push({
+              type: VulnerabilityType.UnprotectedInitialize,
+              severity: Severity.Critical,
+              name: 'Unprotected Initialize Function',
+              description: 'Initialize function lacks access control modifier',
+              recommendation: 'Add onlyInitializing or initializer modifier',
+              line: functionStartLine,
+              code: functionLine.trim(),
+              file: fileContent.path
+            });
+          }
+          inFunction = false;
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private detectMissingZeroCheck(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const addressParamPattern = /function\s+\w+\s*\([^)]*address\s+(\w+)[^)]*\)\s*(?:external|public)/i;
+    const zeroCheckPattern = /!=\s*address\s*\(\s*0\s*\)|!=\s*address0/i;
+
+    let inFunction = false;
+    let functionStartLine = 0;
+    let hasZeroCheck = false;
+    let paramName = '';
+    let functionLine = '';
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      const match = line.match(addressParamPattern);
+      if (match) {
+        inFunction = true;
+        functionStartLine = lineNumber;
+        paramName = match[1];
+        hasZeroCheck = zeroCheckPattern.test(line);
+        functionLine = line;
+        continue;
+      }
+
+      if (inFunction) {
+        if (zeroCheckPattern.test(line)) {
+          hasZeroCheck = true;
+        }
+
+        if (/^\s*\}\s*$/.test(line)) {
+          if (!hasZeroCheck && paramName) {
+            results.push({
+              type: VulnerabilityType.MissingZeroCheck,
+              severity: Severity.Medium,
+              name: 'Missing Zero Address Check',
+              description: `Function parameter '${paramName}' is not validated against zero address`,
+              recommendation: 'Add require statement to validate address is not zero',
+              line: functionStartLine,
+              code: functionLine.trim(),
+              file: fileContent.path
+            });
+          }
+          inFunction = false;
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private detectHardcodedAddresses(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const hardcodedAddressPattern = /0x[0-9a-fA-F]{40}/;
+    const constantPattern = /constant|immutable/i;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      const match = line.match(hardcodedAddressPattern);
+      if (match) {
+        const isConstant = constantPattern.test(line);
+        if (!isConstant) {
+          results.push({
+            type: VulnerabilityType.HardcodedAddress,
+            severity: Severity.Medium,
+            name: 'Hardcoded Address',
+            description: 'Hardcoded address found that may indicate backdoors or reduce flexibility',
+            recommendation: 'Use configurable addresses or document the purpose clearly',
+            line: lineNumber,
+            code: line.trim(),
+            file: fileContent.path
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private detectUnsafeCast(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const unsafeCastPatterns = [
+      /uint\d*\s*\(\s*uint\d+\s*\)/i,
+      /int\d*\s*\(\s*int\d+\s*\)/i,
+      /address\s*\(\s*uint/i,
+      /uint\s*\(\s*int/i
+    ];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      for (const pattern of unsafeCastPatterns) {
+        if (pattern.test(line)) {
+          results.push({
+            type: VulnerabilityType.UnsafeCast,
+            severity: Severity.Medium,
+            name: 'Unsafe Type Casting',
+            description: 'Type casting may truncate data or cause unexpected behavior',
+            recommendation: 'Ensure type casts are safe and do not lose data',
+            line: lineNumber,
+            code: line.trim(),
+            file: fileContent.path
+          });
+          break;
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private detectShadowing(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const stateVars = findStateVariables(fileContent.content);
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      const funcMatch = line.match(/function\s+\w+\s*\(([^)]*)\)/i);
+      if (funcMatch && funcMatch[1]) {
+        const params = funcMatch[1];
+        const paramNames = params.match(/(?:address|uint|int|bool|string|bytes\d*)\s+(\w+)/gi);
+        
+        if (paramNames) {
+          for (const param of paramNames) {
+            const paramName = param.split(/\s+/)[1];
+            if (paramName && stateVars.includes(paramName)) {
+              results.push({
+                type: VulnerabilityType.Shadowing,
+                severity: Severity.Low,
+                name: 'Variable Shadowing',
+                description: `Parameter '${paramName}' shadows a state variable`,
+                recommendation: 'Use different names for parameters to avoid shadowing',
+                line: lineNumber,
+                code: line.trim(),
+                file: fileContent.path
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private detectMissingFallback(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const payableFunctionPattern = /function\s+\w+\s*\([^)]*\)\s*(?:external|public)\s*payable/i;
+    const receivePattern = /receive\s*\(\s*\)\s*(?:external)?\s*payable/i;
+    const fallbackPattern = /fallback\s*\(\s*\)\s*(?:external)?\s*(?:payable)?/i;
+
+    const hasPayableFunction = lines.some(line => payableFunctionPattern.test(line));
+    const hasReceive = lines.some(line => receivePattern.test(line));
+    const hasFallback = lines.some(line => fallbackPattern.test(line));
+
+    if (hasPayableFunction && !hasReceive && !hasFallback) {
+      results.push({
+        type: VulnerabilityType.MissingFallback,
+        severity: Severity.Low,
+        name: 'Missing Fallback/Receive Function',
+        description: 'Contract has payable functions but no fallback/receive for direct ETH transfers',
+        recommendation: 'Add receive() or fallback() function if contract should accept ETH',
+        line: 1,
+        code: 'contract declaration',
+        file: fileContent.path
+      });
+    }
+
+    return results;
+  }
+
+  private detectEtherLoss(fileContent: FileContent): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+    const lines = fileContent.lines;
+
+    const etherLossPatterns = [
+      /address\s*\([^)]+\)\.balance\s*=\s*\d+/i,
+      /balance\s*=\s*0\s*;/i
+    ];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNumber = i + 1;
+
+      if (isCommentLine(line)) continue;
+
+      for (const pattern of etherLossPatterns) {
+        if (pattern.test(line)) {
+          results.push({
+            type: VulnerabilityType.EtherLoss,
+            severity: Severity.Critical,
+            name: 'Potential Ether Loss',
+            description: 'Code may trap or lose Ether due to implementation issues',
+            recommendation: 'Review contract for potential Ether trapping scenarios',
+            line: lineNumber,
+            code: line.trim(),
+            file: fileContent.path
+          });
+          break;
+        }
+      }
+    }
+
     return results;
   }
 
   private deduplicateResults(results: AnalysisResult[]): AnalysisResult[] {
     const seen = new Set<string>();
     const unique: AnalysisResult[] = [];
-    
+
     for (const result of results) {
       const key = `${result.type}:${result.line}:${result.code.substring(0, 50)}`;
       if (!seen.has(key)) {
@@ -366,7 +820,7 @@ export class SmartContractAnalyzer {
         unique.push(result);
       }
     }
-    
+
     return unique.sort((a, b) => {
       const severityOrder: Record<Severity, number> = {
         [Severity.Critical]: 0,

@@ -4,7 +4,7 @@ A TypeScript-based security analyzer for detecting vulnerabilities in Solidity s
 
 ## Features
 
-- **Pattern-based Detection**: Identifies 12+ common vulnerability types
+- **Pattern-based Detection**: Identifies 40+ common vulnerability types
 - **Severity Classification**: Issues categorized as Critical, High, Medium, Low, or Info
 - **Context-Aware Analysis**: Considers surrounding code context for accurate detection
 - **Multiple Output Formats**: Console output with colors or JSON format
@@ -13,20 +13,57 @@ A TypeScript-based security analyzer for detecting vulnerabilities in Solidity s
 
 ## Supported Vulnerability Types
 
-| Type | Severity | Description |
-|------|----------|-------------|
-| `reentrancy` | Critical | External calls before state updates |
-| `integer_overflow` | High | Arithmetic overflow without checks |
-| `integer_underflow` | High | Arithmetic underflow without checks |
-| `unchecked_external_call` | High | Unchecked low-level call return values |
-| `access_control` | High | Missing access control on critical functions |
-| `denial_of_service` | High | Unbounded loops causing gas exhaustion |
-| `unprotected_function` | High | Self-destruct without access control |
-| `weak_randomness` | High | Using block properties for randomness |
-| `timestamp_dependence` | Medium | Logic depends on manipulable timestamps |
-| `front_running` | Medium | Transactions susceptible to front-running |
-| `uninitialized_variable` | Medium | Uninitialized storage pointers |
-| `deprecated_function` | Low | Use of deprecated Solidity functions |
+### Critical Severity
+
+| Type | Description |
+|------|-------------|
+| `reentrancy` | External calls before state updates enabling reentrancy attacks |
+| `delegatecall` | Unsafe delegatecall to arbitrary addresses |
+| `unprotected_initialize` | Initialize function lacks access control |
+| `ether_loss` | Code may trap or lose Ether |
+
+### High Severity
+
+| Type | Description |
+|------|-------------|
+| `integer_overflow` | Arithmetic overflow without SafeMath checks |
+| `integer_underflow` | Arithmetic underflow without SafeMath checks |
+| `unchecked_external_call` | Unchecked low-level call return values |
+| `access_control` | Missing access control on critical functions |
+| `denial_of_service` | Unbounded loops causing gas exhaustion |
+| `unprotected_function` | Self-destruct without access control |
+| `weak_randomness` | Using block properties for randomness |
+| `tx_origin` | Using tx.origin for authentication |
+| `blockhash` | Using blockhash for randomness or security |
+| `signature_malleability` | ECDSA signature malleability issues |
+| `hidden_owner` | Hidden owner functionality |
+
+### Medium Severity
+
+| Type | Description |
+|------|-------------|
+| `timestamp_dependence` | Logic depends on manipulable timestamps |
+| `front_running` | Transactions susceptible to front-running |
+| `uninitialized_variable` | Uninitialized storage pointers |
+| `short_address` | Vulnerable to short address attack |
+| `hardcoded_address` | Hardcoded addresses without documentation |
+| `missing_zero_check` | Missing zero address validation |
+| `unsafe_erc20` | Unsafe ERC20 transfer operations |
+| `centralization_risk` | Single point of control |
+| `missing_input_validation` | Function parameters not validated |
+| `unsafe_cast` | Unsafe type casting |
+| `incorrect_modifier` | Modifier logic errors |
+| `inheritance_issues` | Inheritance order problems |
+
+### Low Severity
+
+| Type | Description |
+|------|-------------|
+| `deprecated_function` | Use of deprecated Solidity functions |
+| `missing_event` | Missing event emissions for state changes |
+| `shadowing` | Variable shadowing state variables |
+| `constancy_issues` | Functions should be pure or view |
+| `missing_fallback` | Missing fallback/receive function |
 
 ## Installation
 
@@ -199,6 +236,46 @@ Risk levels:
 - 30-49: MEDIUM
 - 10-29: LOW
 - 0-9: MINIMAL
+
+## New Vulnerability Patterns
+
+The following vulnerability patterns have been added:
+
+### DelegateCall Detection
+Detects unsafe usage of delegatecall which can lead to contract takeover if the target address is user-controlled.
+
+### TxOrigin Authentication
+Identifies use of tx.origin for authentication, which is vulnerable to phishing attacks.
+
+### Signature Malleability
+Detects direct use of ecrecover without proper signature validation, vulnerable to malleability attacks.
+
+### Hardcoded Address
+Finds hardcoded addresses that may indicate backdoors or reduce contract flexibility.
+
+### Missing Zero Check
+Identifies functions that accept address parameters without validating against zero address.
+
+### Unsafe ERC20 Operations
+Detects direct use of transfer/transferFrom without SafeERC20 library for non-standard token handling.
+
+### Unprotected Initialize
+Finds initialize functions in upgradeable contracts that lack proper access control modifiers.
+
+### Unsafe Type Cast
+Identifies potentially unsafe type conversions that may truncate data.
+
+### Variable Shadowing
+Detects local variables or parameters that shadow state variables.
+
+### Missing Fallback
+Identifies contracts with payable functions but no fallback/receive function.
+
+### Ether Loss
+Detects patterns that may trap or lose Ether.
+
+### Inheritance Issues
+Identifies potential problems with contract inheritance order.
 
 ## Limitations
 

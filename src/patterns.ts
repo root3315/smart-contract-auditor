@@ -23,7 +23,27 @@ export enum VulnerabilityType {
   UnprotectedFunction = 'unprotected_function',
   WeakRandomness = 'weak_randomness',
   DeprecatedFunction = 'deprecated_function',
-  UninitializedVariable = 'uninitialized_variable'
+  UninitializedVariable = 'uninitialized_variable',
+  DelegateCall = 'delegatecall',
+  TxOrigin = 'tx_origin',
+  Blockhash = 'blockhash',
+  SignatureMalleability = 'signature_malleability',
+  ShortAddress = 'short_address',
+  HiddenOwner = 'hidden_owner',
+  HardcodedAddress = 'hardcoded_address',
+  MissingZeroCheck = 'missing_zero_check',
+  UnsafeERC20 = 'unsafe_erc20',
+  MissingEvent = 'missing_event',
+  UnprotectedInitialize = 'unprotected_initialize',
+  CentralizationRisk = 'centralization_risk',
+  MissingInputValidation = 'missing_input_validation',
+  UnsafeCast = 'unsafe_cast',
+  Shadowing = 'shadowing',
+  ConstancyIssues = 'constancy_issues',
+  IncorrectModifier = 'incorrect_modifier',
+  MissingFallback = 'missing_fallback',
+  EtherLoss = 'ether_loss',
+  InheritanceIssues = 'inheritance_issues'
 }
 
 export interface VulnerabilityPattern {
@@ -220,6 +240,271 @@ export const VULNERABILITY_PATTERNS: VulnerabilityPattern[] = [
     contextPatterns: [
       /memory/gi,
       /storage/gi
+    ]
+  },
+  {
+    type: VulnerabilityType.DelegateCall,
+    severity: Severity.Critical,
+    name: 'Unsafe Delegatecall',
+    description: 'delegatecall to arbitrary address can lead to contract takeover',
+    recommendation: 'Restrict delegatecall to trusted addresses only; avoid using with user-controlled addresses',
+    patterns: [
+      /delegatecall\s*\(/gi,
+      /\.delegatecall\s*\(/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.TxOrigin,
+    severity: Severity.High,
+    name: 'Tx Origin Authentication',
+    description: 'Using tx.origin for authentication is vulnerable to phishing attacks',
+    recommendation: 'Use msg.sender instead of tx.origin for authentication',
+    patterns: [
+      /tx\.origin\s*[!=<>=]+\s*/gi,
+      /require\s*\(\s*tx\.origin/gi,
+      /if\s*\(\s*tx\.origin/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.Blockhash,
+    severity: Severity.High,
+    name: 'Blockhash Usage',
+    description: 'Using blockhash for randomness or security is predictable',
+    recommendation: 'Use Chainlink VRF or other secure randomness sources',
+    patterns: [
+      /block\.blockhash\s*\(/gi,
+      /blockhash\s*\(/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.SignatureMalleability,
+    severity: Severity.High,
+    name: 'Signature Malleability',
+    description: 'ECDSA signature may be malleable, allowing replay attacks',
+    recommendation: 'Use OpenZeppelin ECDSA library with proper signature validation',
+    patterns: [
+      /ecrecover\s*\(/gi,
+      /splitSignature\s*\(/gi,
+      /\.r\s*,\s*\.s\s*,\s*\.v/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.ShortAddress,
+    severity: Severity.Medium,
+    name: 'Short Address Attack',
+    description: 'Contract may be vulnerable to short address attack in token transfers',
+    recommendation: 'Validate address length before transfer operations',
+    patterns: [
+      /transfer\s*\(\s*address/gi,
+      /transferFrom\s*\([^)]*address/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.HiddenOwner,
+    severity: Severity.High,
+    name: 'Hidden Owner Pattern',
+    description: 'Contract may have hidden owner functionality that can be exploited',
+    recommendation: 'Review contract for hidden administrative functions',
+    patterns: [
+      /owner\s*=\s*tx\.origin/gi,
+      /owner\s*=\s*msg\.sender/gi,
+      /_owner\s*=/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.HardcodedAddress,
+    severity: Severity.Medium,
+    name: 'Hardcoded Address',
+    description: 'Hardcoded addresses may indicate backdoors or reduce flexibility',
+    recommendation: 'Use configurable addresses or constants with clear documentation',
+    patterns: [
+      /0x[0-9a-fA-F]{40}/gi
+    ],
+    contextPatterns: [
+      /constant/gi,
+      /immutable/gi
+    ]
+  },
+  {
+    type: VulnerabilityType.MissingZeroCheck,
+    severity: Severity.Medium,
+    name: 'Missing Zero Address Check',
+    description: 'Function does not validate against zero address',
+    recommendation: 'Add zero address validation for critical address parameters',
+    patterns: [
+      /function\s+\w+\s*\([^)]*address\s+\w+[^)]*\)\s*(?:external|public)/gi
+    ],
+    contextPatterns: [
+      /!=\s*address\s*\(\s*0\s*\)/gi,
+      /!=\s*address0/gi
+    ]
+  },
+  {
+    type: VulnerabilityType.UnsafeERC20,
+    severity: Severity.Medium,
+    name: 'Unsafe ERC20 Operations',
+    description: 'Using transfer/transferFrom without handling non-standard tokens',
+    recommendation: 'Use SafeERC20 library for token operations',
+    patterns: [
+      /IERC20\s*\([^)]+\)\.transfer\s*\(/gi,
+      /IERC20\s*\([^)]+\)\.transferFrom\s*\(/gi,
+      /token\.transfer\s*\(/gi,
+      /token\.transferFrom\s*\(/gi
+    ],
+    contextPatterns: [
+      /SafeERC20/gi,
+      /using\s+SafeERC20/gi
+    ]
+  },
+  {
+    type: VulnerabilityType.MissingEvent,
+    severity: Severity.Low,
+    name: 'Missing Event Emission',
+    description: 'Critical state changes should emit events for off-chain tracking',
+    recommendation: 'Add event emissions for important state changes',
+    patterns: [
+      /function\s+\w+\s*\([^)]*\)\s*(?:external|public)\s*(?:override)?\s*\{[^}]*\}/gi
+    ],
+    contextPatterns: [
+      /emit\s+\w+/gi
+    ]
+  },
+  {
+    type: VulnerabilityType.UnprotectedInitialize,
+    severity: Severity.Critical,
+    name: 'Unprotected Initialize Function',
+    description: 'Initialize function lacks access control, allowing anyone to initialize',
+    recommendation: 'Add onlyInitializing or similar modifier to initialize functions',
+    patterns: [
+      /function\s+initialize\s*\(/gi,
+      /function\s+init\s*\(/gi,
+      /function\s+initializeV2\s*\(/gi
+    ],
+    contextPatterns: [
+      /onlyInitializing/gi,
+      /onlyProxy/gi,
+      /initializer/gi
+    ]
+  },
+  {
+    type: VulnerabilityType.CentralizationRisk,
+    severity: Severity.Medium,
+    name: 'Centralization Risk',
+    description: 'Contract has single point of control that creates centralization risk',
+    recommendation: 'Consider multi-sig or DAO governance for critical functions',
+    patterns: [
+      /onlyOwner\s*(?:external|public)/gi,
+      /function\s+\w+\s*\([^)]*\)\s*onlyOwner/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.MissingInputValidation,
+    severity: Severity.Medium,
+    name: 'Missing Input Validation',
+    description: 'Function parameters are not properly validated',
+    recommendation: 'Add require statements to validate all input parameters',
+    patterns: [
+      /function\s+\w+\s*\([^)]*uint[^)]*\)\s*(?:external|public)\s*\{[^}]*\}/gi
+    ],
+    contextPatterns: [
+      /require\s*\(/gi,
+      /if\s*\([^)]*<=/gi
+    ]
+  },
+  {
+    type: VulnerabilityType.UnsafeCast,
+    severity: Severity.Medium,
+    name: 'Unsafe Type Casting',
+    description: 'Type casting may truncate data or cause unexpected behavior',
+    recommendation: 'Ensure type casts are safe and do not lose data',
+    patterns: [
+      /uint\d*\s*\(\s*uint\d+\s*\)/gi,
+      /int\d*\s*\(\s*int\d+\s*\)/gi,
+      /address\s*\(\s*uint/gi,
+      /uint\s*\(\s*int/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.Shadowing,
+    severity: Severity.Low,
+    name: 'Variable Shadowing',
+    description: 'Local variable shadows state variable or function parameter',
+    recommendation: 'Use different names for local variables to avoid shadowing',
+    patterns: [
+      /function\s+\w+\s*\([^)]*(\w+)\s+\w+[^)]*\)[^{]*\{[^}]*\b\1\b/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.ConstancyIssues,
+    severity: Severity.Low,
+    name: 'Constancy Issues',
+    description: 'Function should be declared pure or view but is not',
+    recommendation: 'Add pure or view modifier to functions that do not modify state',
+    patterns: [
+      /function\s+\w+\s*\([^)]*\)\s*(?:external|public)\s*(?!pure|view)\{[^}]*return[^}]*\}/gi
+    ],
+    contextPatterns: [
+      /stateVariable\s*=/gi,
+      /emit\s+/gi
+    ]
+  },
+  {
+    type: VulnerabilityType.IncorrectModifier,
+    severity: Severity.Medium,
+    name: 'Incorrect Modifier Usage',
+    description: 'Modifier may have logic errors or be incorrectly implemented',
+    recommendation: 'Review modifier logic for correctness and security',
+    patterns: [
+      /modifier\s+\w+\s*\([^)]*\)\s*\{[^}]*_[^}]*\}/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.MissingFallback,
+    severity: Severity.Low,
+    name: 'Missing Fallback Function',
+    description: 'Contract may need a fallback/receive function to handle direct transfers',
+    recommendation: 'Add receive() or fallback() function if contract should accept ETH',
+    patterns: [
+      /contract\s+\w+[^{]*\{[^}]*payable[^}]*\}/gi
+    ],
+    contextPatterns: [
+      /receive\s*\(\s*\)/gi,
+      /fallback\s*\(\s*\)/gi
+    ]
+  },
+  {
+    type: VulnerabilityType.EtherLoss,
+    severity: Severity.Critical,
+    name: 'Potential Ether Loss',
+    description: 'Contract may trap or lose Ether due to implementation issues',
+    recommendation: 'Review contract for potential Ether trapping scenarios',
+    patterns: [
+      /address\s*\([^)]+\)\.balance\s*=/gi,
+      /balance\s*=\s*0\s*;/gi
+    ],
+    contextPatterns: []
+  },
+  {
+    type: VulnerabilityType.InheritanceIssues,
+    severity: Severity.Medium,
+    name: 'Inheritance Order Issues',
+    description: 'Contract inheritance order may cause unexpected behavior',
+    recommendation: 'Review inheritance order for proper function overriding',
+    patterns: [
+      /contract\s+\w+\s+is\s+[^{]+\{/gi
+    ],
+    contextPatterns: [
+      /override/gi
     ]
   }
 ];
