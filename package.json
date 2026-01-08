@@ -1,0 +1,34 @@
+{
+  "name": "smart-contract-auditor",
+  "version": "1.0.0",
+  "description": "TypeScript-based smart contract security analyzer for detecting vulnerabilities",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "jest",
+    "lint": "eslint src/**/*.ts tests/**/*.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "smart-contract",
+    "security",
+    "auditor",
+    "solidity",
+    "blockchain",
+    "vulnerability"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
